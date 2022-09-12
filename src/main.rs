@@ -162,7 +162,7 @@ unsafe fn get_function_address(module: &str, func: &str) -> core::result::Result
     }
 }
 
-fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> core::result::Result<(), String>{
+fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core::result::Result<(), String>{
 
     let dll = match PeView::from_bytes(&dll_vec) {
         Ok(o) => o,
@@ -243,7 +243,7 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> 
         return Err("Couldn't put informations in the process space".to_string())
     }
 
-    let shellcode = match parse_coff_for_shellcode("./src/shellcode/target/x86_64-pc-windows-msvc/debug/deps/shellcode.o".to_string()){
+    let shellcode = match parse_coff_for_shellcode(shellcode_path){
         Ok(s) => s,
         Err(e) => return Err(e),
     };
@@ -279,8 +279,7 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> 
 
 // Need to use core::result::Result to avoid using the windows one
 fn reflective_load(_process: windows::Win32::Foundation::HANDLE, _dll: Vec<u8>) -> core::result::Result<(), String>{
-    println!("I'm looooooooodin");
-    Err("Failed".to_string())
+    Err("Not implemented yet".to_string())
 }
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -292,6 +291,9 @@ struct Args {
     /// The path to the file to read
     #[clap(short='P', parse(from_os_str))]
     path_to_dll: std::path::PathBuf,
+    /// UNSTABLE: The path to the file to get the shellcode from, entry symbol should be main (base path is: "./src/shellcode/target/x86_64-pc-windows-msvc/debug/deps/shellcode.o"). Not tested with shellcodes that are not mine. 
+    #[clap(short='S')]
+    path_to_shellcode: Option<String>,
     // Build the shellcode ? 
     #[clap(short = 'B')]
     build: bool,
@@ -311,24 +313,23 @@ fn main() {
     let pid = args.pid;
     let path_to_dll = args.path_to_dll;
     let build = args.build;
-
-    println!("Pid is {}", pid);
-    println!("Dll path is {}", path_to_dll.display());
-    println!("build is {}", build);
+    let path_to_shellcode = match args.path_to_shellcode {
+        Some(p) => p,
+        None => "./src/shellcode/target/x86_64-pc-windows-msvc/debug/deps/shellcode.o".to_string()
+    };
 
     if build {
         build_payload().expect("Failed to build");
     }
 
     let process = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid).expect("Cannot open process with given PID") };
-    println!("Opened process {process:?}");
 
     let dll = match fs::read(path_to_dll) {
         Ok(file) => file,
         Err(_) => panic!("Cannot read file at dll path")
     };
 
-    match manual_map(process, dll){
+    match manual_map(process, dll, path_to_shellcode){
         Ok(_) => (),
         Err(e) => println!("{}", e),
     };

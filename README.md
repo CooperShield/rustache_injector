@@ -8,20 +8,19 @@ May add the handling of user selected shellcode, by taking a COFF and searching 
 
 ## Usage
 
-rustache_loader -I <PID> -P <path_to_dll> -B (build shellcode ?)
+rustache_loader -I <PID> -P <path_to_dll> -S <path_to_shellcode (not required if shellcode is in the shellcode build directory)> -B (build shellcode ? from the source dir)
 
 ## Roadmap
 
 ### Manual Mapping
 My code load and set the DLL, then call the entry point
+
 #### Todo
-Make the shellcode a rust shellcode
+Handle more shellcode, at least with a different symbol name
 
 
 ### Reflective Loading
 My code put the DLL in the memory map of the process, create a thread and the DLL set itself up
-
-
 
 ### LoadLibrary
 I've already done a LoadLibrary one in rust before so it'll be added later

@@ -9,6 +9,7 @@ edition = "2021"
 cargo = "0.64.0"
 cc = "1.0.73"
 clap = { version = "3.2.20", features = ["derive"] }
+dirs = "4.0.0"
 pelite = "0.9.1"
 widestring = "1.0.2"
 

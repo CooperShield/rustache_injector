@@ -1,94 +1,24 @@
 use core::ffi::c_void;
 use clap::Parser;
 use std::fs;
-use std::slice;
-use pelite::pe::{Pe, PeView, PeFile};
-use pelite::Pod;
-use pelite::FileMap;
-use widestring::U16CString;
+use pelite::pe::{Pe, PeView};
+
+use std::path;
 
 use windows::{
     core::*,
     Win32::Foundation::*, Win32::System::Threading::*,
     Win32::System::Memory::*, Win32::System::Diagnostics::Debug::*,
-    Win32::System::LibraryLoader::*, Win32::Foundation::HINSTANCE,
+    Win32::System::LibraryLoader::*,
 };
 
 struct ShellcodeParams {
     load_library: u64,
     get_proc_address: u64,
     dll_base: u64,
+    entrypoint: u64,
     done: u64,
 }
-
-impl From<*mut c_void> for ShellcodeParams {
-    fn from(mut ptr: *mut c_void) -> Self {
-        let bytes = ptr.as_bytes_mut();
-        ShellcodeParams{
-            load_library: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
-            get_proc_address: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-            dll_base: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-            done: 0,
-        }
-    }
-}
-
-/*
-#[no_mangle]
-#[inline(always)]
-pub unsafe extern "system" fn shellcode(parameters: *mut c_void) -> u32{
-
-    let parameters = ShellcodeParams::from(parameters);
-
-    let dll_base = parameters.dll_base;
-
-    let raw_image = dll_base as *mut u8;
-
-    let slice = unsafe { slice::from_raw_parts_mut(raw_image, parameters.dll_size) };
-    let dll = match PeView::from_bytes(&slice) {
-        Ok(o) => o,
-        Err(_) => return 1
-    };
-    let dll_opt_hdr = dll.optional_header();
-
-    let _dll_main = dll_opt_hdr.AddressOfEntryPoint;
-    let location_delta = dll_base - dll_opt_hdr.ImageBase;
-    if location_delta != 0 {
-
-        // Handle Dir64 relocations
-        let base_relocs = match dll.base_relocs() {
-            Ok(o) => o,
-            Err(_) => return 1,
-        };
-        base_relocs.for_each(|rva, ty| {
-            if ty == 10 {
-                let p = raw_image.offset(rva as isize) as *mut usize;
-                let fixed_addr = std::ptr::read_unaligned(p).wrapping_add(location_delta as usize);
-                std::ptr::write_unaligned(p, fixed_addr);
-            }
-        })
-    }
-
-	// Access the import directory
-	let imports = dll.imports().unwrap();
-
-	// Iterate over the import descriptors
-	for desc in imports {
-		// DLL being imported from
-		let dll_name = desc.dll_name().unwrap();
-
-		// Import Address Table and Import Name Table for this imported DLL
-		let iat = desc.iat().unwrap();
-		let int = desc.int().unwrap();
-        
-		// Iterate over the imported functions from this DLL
-		for (va, import) in Iterator::zip(iat, int) {
-        }
-	}
-
-    0
-}
-*/
 
 struct CoffFileHeader {
     f_magic: u16,	/* Magic number */	
@@ -167,7 +97,6 @@ impl From<Vec<u8>> for SectionEntry {
 }
 
 fn parse_coff_for_shellcode(path: String) -> core::result::Result<Vec<u8>, String>{
-    println!("I'm parsiiiiiiiiiiiiiiiiiiiiiin");
     // https://wiki.osdev.org/COFF
     let file = match fs::read(path) {
         Ok(f) => f,
@@ -183,7 +112,9 @@ fn parse_coff_for_shellcode(path: String) -> core::result::Result<Vec<u8>, Strin
 
     let mut ptr = header.f_symptr;
     let mut remaining_sym = header.f_nsyms;
-    let payload_arr:[u8;8] = [80,97,121,108,111,97,100,0];
+    // main>
+    let payload_symbol:[u8;8] = [109,97,105,110,0,0,0,0];
+
 
     let (section_number, section_index) = loop {
         if remaining_sym == 0 {
@@ -196,9 +127,8 @@ fn parse_coff_for_shellcode(path: String) -> core::result::Result<Vec<u8>, Strin
             None => return Err("Payload not found in symbols".to_string())
         };
 
-        // If symbol name is Payload, the type is a function entry point and the class is C_EXT
-        //println!("{:?} {} {} {}", header.n_name, header.n_name.eq(&payload_arr), header.n_type, header.n_scnum);
-        if header.n_name.eq(&payload_arr) && header.n_type == 0x20 && header.n_sclass == 0x2 {
+        // If symbol name is main, the type is a function entry point and the class is C_EXT
+        if header.n_name.eq(&payload_symbol) && header.n_type == 0x20 && header.n_sclass == 0x2 {
             break (header.n_scnum, header.n_value)
         }
         remaining_sym -= 1;
@@ -233,7 +163,6 @@ unsafe fn get_function_address(module: &str, func: &str) -> core::result::Result
 }
 
 fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> core::result::Result<(), String>{
-    println!("Manual Mapiiiiiiiin");
 
     let dll = match PeView::from_bytes(&dll_vec) {
         Ok(o) => o,
@@ -243,7 +172,7 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> 
     let dll_opt_hdr = dll.optional_header();
 
     let target_base: *const c_void = unsafe { std::mem::transmute(dll_opt_hdr.ImageBase) };
-    println!("Prefered image base is: {:#x}", target_base as u64);
+    let entrypoint = dll_opt_hdr.AddressOfEntryPoint;
     let target_base = unsafe { VirtualAllocEx(process, target_base, dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) };
     let target_base =
         if target_base as u64 == 0 {
@@ -288,41 +217,38 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>) -> 
 
     // Getting the address of LoadLibraryA and get GetProcAddress
     let load_library = unsafe { get_function_address("kernel32.dll\0", "LoadLibraryA\0") }?;
-    println!("LoadLibrary done");
     let get_proc_address = unsafe { get_function_address("kernel32.dll\0", "GetProcAddress\0") }?;
     
 
+    // Arguments needed for the payload to do its magic
     let params = ShellcodeParams {
         load_library: load_library as u64, // 
-        get_proc_address:  get_proc_address as u64, // This get me the rust wrappers
+        get_proc_address:  get_proc_address as u64,
         dll_base: target_base as u64,
+        entrypoint: target_base as u64 + entrypoint as u64,
         done: 0,
     };
 
-    println!("LL: {:#x}, GPA: {:#x}, DB: {:#x}, Done: {:#x}", params.load_library, params.get_proc_address, params.dll_base, params.done);
-
-    let param_addr = unsafe { VirtualAllocEx(process, std::ptr::null(), dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+    let param_addr = unsafe { VirtualAllocEx(process, std::ptr::null(), std::mem::size_of::<ShellcodeParams>(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
     if param_addr as u64 == 0 {
         return Err("Memory allocation failed".to_string())
     }
     let written = unsafe {
         // Copying needed informations to the dll address space (Keep the dll struct intact)
         let mut size_written = 0;
-        WriteProcessMemory(process, param_addr, vec!(params.load_library, params.get_proc_address, params.dll_base, params.done).as_ptr() as u64 as *const c_void, std::mem::size_of::<ShellcodeParams>(), &mut size_written).as_bool()
+        WriteProcessMemory(process, param_addr, vec!(params.load_library, params.get_proc_address, params.dll_base, params.entrypoint, params.done).as_ptr() as u64 as *const c_void, std::mem::size_of::<ShellcodeParams>(), &mut size_written).as_bool()
 
     };
     if !written {
         return Err("Couldn't put informations in the process space".to_string())
     }
 
-    let shellcode = match parse_coff_for_shellcode("target/src/shellcode/Injection.o".to_string()){
+    let shellcode = match parse_coff_for_shellcode("./src/shellcode/target/x86_64-pc-windows-msvc/debug/deps/shellcode.o".to_string()){
         Ok(s) => s,
         Err(e) => return Err(e),
     };
 
     let shellcode_addr = unsafe { VirtualAllocEx(process, std::ptr::null(), shellcode.len() as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
-
-    println!("Shellcode addr: {:#x}", shellcode_addr as u64);
 
     let written = unsafe {
         // Copying the shellcode to the dll address space
@@ -371,6 +297,15 @@ struct Args {
     build: bool,
 }
 
+fn build_payload() -> core::result::Result<(), String>{
+    let config = cargo::util::config::Config::new(cargo::core::shell::Shell::new(), fs::canonicalize(path::PathBuf::from("./src/shellcode/")).unwrap(),dirs::home_dir().unwrap().join(".cargo"));
+
+
+    let workspace = cargo::core::Workspace::new(fs::canonicalize(path::PathBuf::from("./src/shellcode/Cargo.toml")).expect("Couldn't get the path as absolute").as_path(), &config).expect("Couldn't create build workspace");
+    let _build = cargo::ops::compile(&workspace, &cargo::ops::CompileOptions::new(&config, cargo::core::compiler::CompileMode::Build).expect("Failed to get compile options")).expect("Failed to build");
+    Ok(())
+}
+
 fn main() {
     let args = Args::parse();
     let pid = args.pid;
@@ -382,21 +317,8 @@ fn main() {
     println!("build is {}", build);
 
     if build {
-    // No fucking taking the infos from the env variables lol sheeee
-    // Technically still makes my project be fully rust Right ?
-        let _test = cc::Build::new()
-        .files(["src/shellcode/Injection.cpp"])
-        .cpp(true)
-        .out_dir("./target")
-        .target("x86_64-pc-windows-msvc")
-        .opt_level(3)
-        .host("x86_64-pc-windows-msvc")
-        .flag("-EHsc")
-        .try_compile("shellcode");
+        build_payload().expect("Failed to build");
     }
-
-    //let result = parse_coff_for_shellcode("./target/Injection.o".to_string()).unwrap();
-    //println!("Size: {}", result.len());
 
     let process = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid).expect("Cannot open process with given PID") };
     println!("Opened process {process:?}");
@@ -405,8 +327,6 @@ fn main() {
         Ok(file) => file,
         Err(_) => panic!("Cannot read file at dll path")
     };
-
-    //let _result = test(dll);
 
     match manual_map(process, dll){
         Ok(_) => (),

@@ -134,7 +134,7 @@ pub struct IMAGE_IMPORT_DESCRIPTOR {
 #[repr(C)]
 pub struct IMAGE_IMPORT_BY_NAME {
     pub Hint: WORD,
-    pub Name: *mut i8
+    pub Name: WORD
 }
 
 #[repr(C)]

@@ -20,6 +20,8 @@ struct ShellcodeParams {
     done: u64,
 }
 
+type ShellcodeFn = unsafe extern "system" fn (*mut c_void) -> u32;
+
 struct CoffFileHeader {
     f_magic: u16,	/* Magic number */	
 	f_nscns: u16,	/* Number of Sections */
@@ -151,18 +153,58 @@ fn parse_coff_for_shellcode(path: String) -> core::result::Result<Vec<u8>, Strin
     }
 }
 
-unsafe fn get_function_address(module: &str, func: &str) -> core::result::Result<*const (), String> {
+fn get_function_address(module: &str, func: &str) -> core::result::Result<*const (), String> {
     let module = module.to_string();
 
-    let module_handle = GetModuleHandleA(PCSTR(module.as_ptr())).ok();
-    let result = GetProcAddress(module_handle, PCSTR(func.as_ptr()));
+    let module_handle = unsafe { GetModuleHandleA(PCSTR(module.as_ptr())).ok() };
+    let result = unsafe { GetProcAddress(module_handle, PCSTR(func.as_ptr())) };
     match result {
         Some(v) => Ok(v as u64 as *const ()),
         None => Err("Couldn't find the address of function".to_string()),
     }
 }
 
-fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core::result::Result<(), String>{
+fn get_memory(process: HANDLE, addr: *const c_void, size: usize, allocFlags: VIRTUAL_ALLOCATION_TYPE, protectFlag: PAGE_PROTECTION_FLAGS) -> core::result::Result<*mut c_void, String> {
+    let addr = unsafe { VirtualAllocEx(process, addr, size, allocFlags, protectFlag) };
+    match addr as u64 {
+        0 => Err("Memory allocation failed".to_string()),
+        _ => Ok(addr)
+    }
+}
+
+fn write_memory(process: HANDLE, addr: *const c_void, buffer: *const c_void, size: usize) -> core::result::Result<(), String> {
+    let mut size_written = 0;
+    let written = unsafe { WriteProcessMemory(process, addr, buffer as u64 as *const c_void, size, &mut size_written).as_bool() };
+    match written && size_written == size {
+        true => Ok(()),
+        _ => Err("Failed to write into process space".to_string()),
+    }
+}
+
+fn free_memory(process: HANDLE, addr: *const c_void) {
+    unsafe { VirtualFreeEx(process, addr as *mut c_void, 0, MEM_RELEASE) };
+}
+
+fn change_permission(process: HANDLE, addr: *const c_void, size: usize, protectFlag: PAGE_PROTECTION_FLAGS) -> core::result::Result<PAGE_PROTECTION_FLAGS, String> {
+    let mut old_protect = PAGE_READWRITE;
+    let res = unsafe { VirtualProtectEx(process, addr, size, PAGE_EXECUTE_READ, &mut old_protect).as_bool() };
+    match res {
+        true => Ok(old_protect),
+        false => Err("Failed to change the page protection".to_string())
+    }
+}
+
+fn create_thread(process: HANDLE, start_addr: ShellcodeFn, arg_ptr: *const c_void,) -> core::result::Result<(), String> {
+    let mut tid = 0;
+    let thread = unsafe { CreateRemoteThread(process, std::ptr::null(), 0, Some(start_addr), arg_ptr, 0, &mut tid) };
+
+    match thread {
+        Ok(t) => { unsafe { CloseHandle(t); }; Ok(())},
+        Err(e) => return Err(e.to_string()),
+    }
+}
+
+fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core::result::Result<(), String>{
 
     let dll = match PeView::from_bytes(&dll_vec) {
         Ok(o) => o,
@@ -173,51 +215,30 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>, she
 
     let target_base: *const c_void = unsafe { std::mem::transmute(dll_opt_hdr.ImageBase) };
     let entrypoint = dll_opt_hdr.AddressOfEntryPoint;
-    let target_base = unsafe { VirtualAllocEx(process, target_base, dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) };
-    let target_base =
-        if target_base as u64 == 0 {
-            let target_base = unsafe { VirtualAllocEx(process, std::ptr::null(), dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) };
-            if target_base as u64 == 0 {
-                return Err("Cannot allocate memory in the process".to_string())
-            }
-            target_base
-        } 
-        else {
-            target_base
+    let target_base = get_memory(process, target_base, dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    let target_base = match target_base {
+        Ok(a) => a,
+        _ => get_memory(process, std::ptr::null(), dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)?,
     };
 
     // Putting the DLL header into the process
-    let written = unsafe {
-        // Copying needed informations to the dll address space (Header and more, need to calculate the size better)
-        let mut size_written = 0;
-        WriteProcessMemory(process, target_base, dll_vec.as_ptr() as u64 as *const c_void, 0x1000, &mut size_written).as_bool()
-
-    };
-    if !written {
-        return Err("Couldn't put informations in the process space".to_string())
-    }
+    write_memory(process, target_base, dll_vec.as_ptr() as u64 as *const c_void, 0x1000)?;
 
     let section_headers = dll.section_headers();
 
     for section in section_headers.iter() {
         if section.SizeOfRawData > 0 {
-            let mut size_written = 0;
-            // Big line incoming
-            let result = unsafe {
-                // Let me cast a vomit inducing spell
-                let sliced = &dll_vec[section.PointerToRawData as usize..(section.PointerToRawData + section.SizeOfRawData) as usize];
-                WriteProcessMemory(process, (target_base as u64 + section.VirtualAddress as u64) as *const c_void, sliced.as_ptr() as u64 as *const c_void, section.SizeOfRawData as usize, &mut size_written).as_bool()
+            let sliced = &dll_vec[section.PointerToRawData as usize..(section.PointerToRawData + section.SizeOfRawData) as usize];
+            match write_memory(process, (target_base as u64 + section.VirtualAddress as u64) as *const c_void, sliced.as_ptr() as u64 as *const c_void, section.SizeOfRawData as usize){
+                Err(e) => { free_memory(process, target_base as *mut c_void); return Err(e) } ,
+                _ => {},
             };
-            if !result {
-                unsafe { VirtualFreeEx(process, target_base as *mut c_void, 0, MEM_RELEASE) };
-                return Err("Couldn't write section to process".to_string())
-            }
         }
     }
 
     // Getting the address of LoadLibraryA and get GetProcAddress
-    let load_library = unsafe { get_function_address("kernel32.dll\0", "LoadLibraryA\0") }?;
-    let get_proc_address = unsafe { get_function_address("kernel32.dll\0", "GetProcAddress\0") }?;
+    let load_library = get_function_address("kernel32.dll\0", "LoadLibraryA\0")?;
+    let get_proc_address = get_function_address("kernel32.dll\0", "GetProcAddress\0")?;
     
 
     // Arguments needed for the payload to do its magic
@@ -229,50 +250,20 @@ fn manual_map(process: windows::Win32::Foundation::HANDLE, dll_vec: Vec<u8>, she
         done: 0,
     };
 
-    let param_addr = unsafe { VirtualAllocEx(process, std::ptr::null(), std::mem::size_of::<ShellcodeParams>(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
-    if param_addr as u64 == 0 {
-        return Err("Memory allocation failed".to_string())
-    }
-    let written = unsafe {
-        // Copying needed informations to the dll address space (Keep the dll struct intact)
-        let mut size_written = 0;
-        WriteProcessMemory(process, param_addr, vec!(params.load_library, params.get_proc_address, params.dll_base, params.entrypoint, params.done).as_ptr() as u64 as *const c_void, std::mem::size_of::<ShellcodeParams>(), &mut size_written).as_bool()
+    let param_addr = get_memory(process, std::ptr::null(), std::mem::size_of::<ShellcodeParams>(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)?;
+    // Copying needed informations to the dll address space (Keep the dll struct intact)
+    write_memory(process, param_addr, vec!(params.load_library, params.get_proc_address, params.dll_base, params.entrypoint, params.done).as_ptr() as u64 as *const c_void, std::mem::size_of::<ShellcodeParams>())?;
 
-    };
-    if !written {
-        return Err("Couldn't put informations in the process space".to_string())
-    }
+    let shellcode = parse_coff_for_shellcode(shellcode_path)?;
 
-    let shellcode = match parse_coff_for_shellcode(shellcode_path){
-        Ok(s) => s,
-        Err(e) => return Err(e),
-    };
+    let shellcode_addr = get_memory(process, std::ptr::null(), shellcode.len() as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)?;
 
-    let shellcode_addr = unsafe { VirtualAllocEx(process, std::ptr::null(), shellcode.len() as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+    write_memory(process, shellcode_addr, shellcode.as_ptr() as *const c_void, shellcode.len())?;
 
-    let written = unsafe {
-        // Copying the shellcode to the dll address space
-        let mut size_written = 0;
-        WriteProcessMemory(process, shellcode_addr, shellcode.as_ptr() as *const c_void, shellcode.len(), &mut size_written).as_bool()
-    };
-    if !written {
-        return Err("Couldn't put informations in the process space".to_string())
-    }
+    change_permission(process, shellcode_addr, shellcode.len(), PAGE_EXECUTE_READ)?;
 
-    let mut old_protect: PAGE_PROTECTION_FLAGS = PAGE_READWRITE;
-    let success = unsafe { VirtualProtectEx(process, shellcode_addr, shellcode.len(), PAGE_EXECUTE_READ, &mut old_protect) };
-    if !success.as_bool() {
-        return Err("Couldn't change the page permissions".to_string())
-    }
-
-    let shellcode_func_ptr: unsafe extern "system" fn (*mut c_void) -> u32 = unsafe { std::mem::transmute(shellcode_addr) };
-    let mut tid = 0;
-    let thread = unsafe { CreateRemoteThread(process, std::ptr::null(), 0, Some(shellcode_func_ptr), param_addr, 0, &mut tid) };
-
-    match thread {
-        Ok(t) => { println!("Thread created"); unsafe { CloseHandle(t); };},
-        Err(e) => return Err(e.to_string()),
-    }
+    let shellcode_func_ptr: ShellcodeFn = unsafe { std::mem::transmute(shellcode_addr) };
+    create_thread(process, shellcode_func_ptr, param_addr)?;
 
     Ok(())
 }

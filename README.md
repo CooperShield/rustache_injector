@@ -41,3 +41,6 @@ Hopefully making it so that the user can chose which one to use
 
 ## GuidedHacking (https://guidedhacking.com/)
 For the Manual map tutorial + the multiples threads and answer to better it
+
+## b1tg (https://github.com/b1tg/rust-windows-shellcode)
+For the skeleton of my Rust shellcode

@@ -8,7 +8,7 @@ May add the handling of user selected shellcode, by taking a COFF and searching 
 
 ## Usage
 
-rustache_loader -I <PID> -P <path_to_dll> -S <path_to_shellcode (not required if shellcode is in the shellcode build directory)> -B (build shellcode ? from the source dir)
+`rustache_loader -I <PID> -P <path_to_dll> -S <path_to_shellcode (not required if shellcode is in the shellcode build directory)> -B (build shellcode ? from the source dir)`
 
 ## Roadmap
 

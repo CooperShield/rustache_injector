@@ -68,13 +68,12 @@ pub struct ShellcodeParams {
                     let pPatch = (raw_image as usize + (*reloc_data).VirtualAddress as usize + ((*relative_info as u16) & 0xFFF) as usize) as *mut usize;
                     (*pPatch) += location_delta;
                 }
-                relative_info = ((relative_info as usize) + 8 as usize) as *mut u16; // Change size
+                relative_info = ((relative_info as usize) + 8 as usize) as *mut u16;
             }
             reloc_data = (reloc_data as usize + (*reloc_data).Size as usize) as *mut IMAGE_DATA_DIRECTORY;
         }
     }
 
-    // Tjrs ici le pb
     let import_directory = &(*opt_hdr).OptionalHeader.DataDirectory[(IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_IMPORT) as usize];
     if import_directory.Size != 0 {
         let mut import_desc = (raw_image as usize + import_directory.VirtualAddress as usize) as *mut IMAGE_IMPORT_DESCRIPTOR;

@@ -1,6 +1,6 @@
 # Rustache Loader
 
-This is aimed to be usable both as a standalone binary and as a library (is that even doable ? Will find out)
+This is aimed to be usable both as a standalone binary and as a library (Not done yet)
 The aim of the project is to implement different method of DLL injection into a remote process
 
 This project use the windows crate to interact with Windows and the PeLite to parse the PE, will try to make it better to avoid PeLite (used to test faster) and try to include direct syscalling.

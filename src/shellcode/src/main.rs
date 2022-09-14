@@ -34,45 +34,44 @@ pub struct ShellcodeParams {
 }
 
 #[no_mangle]
- pub unsafe extern "C" fn main(params: *mut ShellcodeParams) -> u32 {
-    let dll_base =  (*params).dll_base ;
+ pub unsafe extern "C" fn main(params: &mut ShellcodeParams) -> u32 {
+    let dll_base =  params.dll_base ;
     let raw_image = dll_base as *mut u8;
     let dos_header: *mut IMAGE_DOS_HEADER = raw_image as *mut IMAGE_DOS_HEADER;
     
-    let load_library = (*params).load_library;
-    let get_proc_address = (*params).get_proc_address;
-    let entrypoint = (*params).entrypoint;
+    let load_library = params.load_library;
+    let get_proc_address = params.get_proc_address;
+    let entrypoint = params.entrypoint;
 
 
-    let opt_hdr: *mut IMAGE_NT_HEADERS64 = (raw_image as usize +  (*dos_header).e_lfanew as usize) as *mut IMAGE_NT_HEADERS64;
+    let opt_hdr: &IMAGE_NT_HEADERS64 = core::mem::transmute(raw_image as usize +  (*dos_header).e_lfanew as usize);
     
 
-  let location_delta = raw_image as usize - (*opt_hdr).OptionalHeader.ImageBase as usize ;
-    if location_delta != 0 {
+    let location_delta = raw_image as usize - opt_hdr.OptionalHeader.ImageBase as usize ;
+        if location_delta != 0 {
 
-        let reloc_directory = &(*opt_hdr).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
-        if reloc_directory.Size == 0 {
-            return 1
-        }
+            let reloc_directory = &opt_hdr.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
+            if reloc_directory.Size == 0 {
+                return 1
+            }
 
-        let mut reloc_data: *mut IMAGE_DATA_DIRECTORY = (raw_image as usize + reloc_directory.VirtualAddress as usize) as *mut IMAGE_DATA_DIRECTORY;
+            let mut reloc_data: IMAGE_DATA_DIRECTORY = core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize);
         
-        loop  {
-            if (*reloc_data).VirtualAddress != 0 {
-                break
-            }
-            let AmountOfEntries = ((*reloc_data).Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);\
-            let mut relative_info = (reloc_data as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16; // Go past the IMAGE_DATiA_DIRECTORY header
-            for _ in 0..AmountOfEntries {
-                if (*relative_info >> 0x0C) as u16 == IMAGE_REL_BASED_DIR64 {
-                    let pPatch = (raw_image as usize + (*reloc_data).VirtualAddress as usize + ((*relative_info as u16) & 0xFFF) as usize) as *mut usize;
-                    (*pPatch) += location_delta;
+            loop  {
+                if reloc_data.VirtualAddress != 0 {
+                    break
                 }
-                relative_info = ((relative_info as usize) + 8 as usize) as *mut u16;
+                let AmountOfEntries = (reloc_data.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
+                let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc_data) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);
+                for entry in slice{
+                    if (entry >> 0x0C) == IMAGE_REL_BASED_DIR64 {
+                        let pPatch = (raw_image as usize + reloc_data.VirtualAddress as usize + (entry & 0xFFF) as usize) as *mut usize;
+                        (*pPatch) += location_delta;
+                    }
+                }
+                reloc_data = core::mem::transmute(core::ptr::addr_of!(reloc_data) as usize + reloc_data.Size as usize);
             }
-            reloc_data = (reloc_data as usize + (*reloc_data).Size as usize) as *mut IMAGE_DATA_DIRECTORY;
         }
-    }
 
     let import_directory = &(*opt_hdr).OptionalHeader.DataDirectory[(IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_IMPORT) as usize];
     if import_directory.Size != 0 {
@@ -116,7 +115,7 @@ pub struct ShellcodeParams {
         }
     }
     entrypoint(dll_base as *mut binds::c_void, DLL_PROCESS_ATTACH, 0 as *mut binds::c_void);
-    (*params).done = 1;
+    params.done = 1;
 
     0
 }

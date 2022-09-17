@@ -122,21 +122,6 @@ pub struct IMAGE_DATA_DIRECTORY_WRAPPER {
     pub directory: IMAGE_DATA_DIRECTORY,
 }
 
-impl Iterator for IMAGE_DATA_DIRECTORY {
-    type Item = IMAGE_DATA_DIRECTORY;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let res:IMAGE_DATA_DIRECTORY  = unsafe { core::mem::transmute(core::ptr::addr_of!(self)) };
-        match self.VirtualAddress {
-            0 => { 
-                self.Size = res.Size; self.VirtualAddress = self.VirtualAddress;
-                Some(res)
-            },
-            _ => None,
-        }
-    }
-}
-
 impl Iterator for IMAGE_DATA_DIRECTORY_WRAPPER {
     type Item = IMAGE_DATA_DIRECTORY;
 

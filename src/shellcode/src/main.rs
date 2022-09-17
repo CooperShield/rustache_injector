@@ -54,10 +54,9 @@ pub struct ShellcodeParams {
             if reloc_directory.Size == 0 {
                 return 1
             }
-            /*let reloc_data = IMAGE_DATA_DIRECTORY_WRAPPER {
+            let reloc_data = IMAGE_DATA_DIRECTORY_WRAPPER {
                 directory: core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize)
-            };*/
-            let reloc_data: IMAGE_DATA_DIRECTORY = core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize);
+            };
             for reloc in reloc_data {
                 let AmountOfEntries = (reloc.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
                 let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);

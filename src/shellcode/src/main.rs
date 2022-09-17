@@ -48,26 +48,25 @@ pub struct ShellcodeParams {
     
 
     let location_delta = raw_image as usize - opt_hdr.OptionalHeader.ImageBase as usize ;
-        if location_delta != 0 {
-
-            let reloc_directory = &opt_hdr.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
-            if reloc_directory.Size == 0 {
-                return 1
-            }
-            let reloc_data = IMAGE_DATA_DIRECTORY_WRAPPER {
-                directory: core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize)
-            };
-            for reloc in reloc_data {
-                let AmountOfEntries = (reloc.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
-                let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);
-                for entry in slice{
-                    if (entry >> 0x0C) == IMAGE_REL_BASED_DIR64 {
-                        let pPatch = (raw_image as usize + reloc.VirtualAddress as usize + (entry & 0xFFF) as usize) as *mut usize;
-                        (*pPatch) += location_delta;
-                    }
+    if location_delta != 0 {
+        let reloc_directory = &opt_hdr.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
+        if reloc_directory.Size == 0 {
+            return 1
+        }
+        let reloc_data = IMAGE_DATA_DIRECTORY_WRAPPER {
+            directory: core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize)
+        };
+        for reloc in reloc_data {
+            let AmountOfEntries = (reloc.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
+            let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);
+            for entry in slice{
+                if (entry >> 0x0C) == IMAGE_REL_BASED_DIR64 {
+                    let pPatch = (raw_image as usize + reloc.VirtualAddress as usize + (entry & 0xFFF) as usize) as *mut usize;
+                    (*pPatch) += location_delta;
                 }
             }
         }
+    }
 
     let import_directory = &(*opt_hdr).OptionalHeader.DataDirectory[(IMAGE_DIRECTORY_ENTRY_INDEX::IMAGE_DIRECTORY_ENTRY_IMPORT) as usize];
     if import_directory.Size != 0 {

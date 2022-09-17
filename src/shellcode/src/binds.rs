@@ -2,6 +2,8 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
+use core::borrow::BorrowMut;
+
 pub enum c_void {}
 pub type BOOLEAN = u8;
 pub type HANDLE = *mut c_void;
@@ -116,6 +118,39 @@ pub struct IMAGE_DATA_DIRECTORY {
     pub Size: DWORD,
 }
 
+pub struct IMAGE_DATA_DIRECTORY_WRAPPER {
+    pub directory: IMAGE_DATA_DIRECTORY,
+}
+
+impl Iterator for IMAGE_DATA_DIRECTORY {
+    type Item = IMAGE_DATA_DIRECTORY;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let res:IMAGE_DATA_DIRECTORY  = unsafe { core::mem::transmute(core::ptr::addr_of!(self)) };
+        match self.VirtualAddress {
+            0 => { 
+                self.Size = res.Size; self.VirtualAddress = self.VirtualAddress;
+                Some(res)
+            },
+            _ => None,
+        }
+    }
+}
+
+impl Iterator for IMAGE_DATA_DIRECTORY_WRAPPER {
+    type Item = IMAGE_DATA_DIRECTORY;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let res:IMAGE_DATA_DIRECTORY  = unsafe { core::mem::transmute(core::ptr::addr_of!(self.directory)) };
+        match self.directory.VirtualAddress {
+            0 => { 
+                self.directory = unsafe { core::mem::transmute(core::ptr::addr_of!(self.directory) as usize + self.directory.Size as usize) };
+                Some(res)
+            },
+            _ => None,
+        }
+    }
+}
 
 #[repr(C)]
 pub struct IMAGE_IMPORT_DESCRIPTOR {
@@ -129,8 +164,6 @@ pub struct IMAGE_IMPORT_DESCRIPTOR {
     pub Name: DWORD,
     pub FirstThunk: DWORD,                     // RVA to IAT (if bound this IAT has actual addresses)
 }
-
-
 
 #[repr(C)]
 pub struct IMAGE_IMPORT_BY_NAME {

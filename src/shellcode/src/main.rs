@@ -54,22 +54,19 @@ pub struct ShellcodeParams {
             if reloc_directory.Size == 0 {
                 return 1
             }
-
-            let mut reloc_data: IMAGE_DATA_DIRECTORY = core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize);
-        
-            loop  {
-                if reloc_data.VirtualAddress != 0 {
-                    break
-                }
-                let AmountOfEntries = (reloc_data.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
-                let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc_data) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);
+            /*let reloc_data = IMAGE_DATA_DIRECTORY_WRAPPER {
+                directory: core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize)
+            };*/
+            let reloc_data: IMAGE_DATA_DIRECTORY = core::mem::transmute(raw_image as usize + reloc_directory.VirtualAddress as usize);
+            for reloc in reloc_data {
+                let AmountOfEntries = (reloc.Size - SIZE_IMAGE_BASE_RELOCATION) / 2; // divided by sizeof(WORD);
+                let slice = core::slice::from_raw_parts((core::ptr::addr_of!(reloc) as usize + SIZE_IMAGE_DATA_DIRECTORY) as *mut u16, AmountOfEntries as usize);
                 for entry in slice{
                     if (entry >> 0x0C) == IMAGE_REL_BASED_DIR64 {
-                        let pPatch = (raw_image as usize + reloc_data.VirtualAddress as usize + (entry & 0xFFF) as usize) as *mut usize;
+                        let pPatch = (raw_image as usize + reloc.VirtualAddress as usize + (entry & 0xFFF) as usize) as *mut usize;
                         (*pPatch) += location_delta;
                     }
                 }
-                reloc_data = core::mem::transmute(core::ptr::addr_of!(reloc_data) as usize + reloc_data.Size as usize);
             }
         }
 

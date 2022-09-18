@@ -8,7 +8,7 @@ May add the handling of user selected shellcode, by taking a COFF and searching 
 
 ## Usage
 
-`rustache_loader -I <PID> -P <path_to_dll> -S <path_to_shellcode (not required if shellcode is in the shellcode build directory)> -B (build shellcode ? from the source dir)`
+`rustache_loader -I <PID> -P <path_to_dll> -S <path_to_shellcode (not required if shellcode is in the shellcode build directory)> -B (build shellcode from the source dir ?)`
 
 ## Roadmap
 
@@ -28,7 +28,7 @@ I've already done a LoadLibrary one in rust before so it'll be added later
 ### x86 support
 TODO
 
-### Handle more complex Dll
+### Handle more complex DLL
 Maybe
 Then i'll try to get a better PE Loader
 

@@ -174,7 +174,7 @@ fn get_memory(process: HANDLE, addr: *const c_void, size: usize, allocFlags: VIR
 
 fn write_memory(process: HANDLE, addr: *const c_void, buffer: *const c_void, size: usize) -> core::result::Result<(), String> {
     let mut size_written = 0;
-    let written = unsafe { WriteProcessMemory(process, addr, buffer as u64 as *const c_void, size, &mut size_written).as_bool() };
+    let written = unsafe { WriteProcessMemory(process, addr, buffer, size, &mut size_written).as_bool() };
     match written && size_written == size {
         true => Ok(()),
         _ => Err("Failed to write into process space".to_string()),
@@ -191,6 +191,15 @@ fn change_permission(process: HANDLE, addr: *const c_void, size: usize, protectF
     match res {
         true => Ok(old_protect),
         false => Err("Failed to change the page protection".to_string())
+    }
+}
+
+fn read_memory(process: HANDLE, addr: *const c_void, buffer: *mut c_void, size: usize) -> core::result::Result<*mut c_void, String>{
+    let mut size_red = 0;
+    let red = unsafe { ReadProcessMemory(process, addr, buffer, size, &mut size_red).as_bool() };
+    match red && size_red == size {
+        true => Ok(buffer),
+        _ => Err("Failed to write into process space".to_string()),
     }
 }
 
@@ -265,6 +274,14 @@ fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core
     let shellcode_func_ptr: ShellcodeFn = unsafe { std::mem::transmute(shellcode_addr) };
     create_thread(process, shellcode_func_ptr, param_addr)?;
 
+    loop {
+        let params = read_memory(process, param_addr, std::ptr::addr_of!(params) as *mut c_void, std::mem::size_of::<ShellcodeParams>())? as *const ShellcodeParams;
+        if unsafe { (*params).done } != 0 {
+            break 
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    println!("Done");
     Ok(())
 }
 

@@ -1,9 +1,6 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-
-use core::borrow::BorrowMut;
-
 pub enum c_void {}
 pub type BOOLEAN = u8;
 pub type HANDLE = *mut c_void;
@@ -137,6 +134,39 @@ impl Iterator for IMAGE_DATA_DIRECTORY_WRAPPER {
     }
 }
 
+pub struct IMAGE_DATA_DIRECTORY_ITERATOR {
+    entry_amount: usize,
+    index: usize,
+    array: usize,
+}
+
+impl IntoIterator for IMAGE_DATA_DIRECTORY {
+    type Item = u16;
+    type IntoIter = IMAGE_DATA_DIRECTORY_ITERATOR;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IMAGE_DATA_DIRECTORY_ITERATOR {
+            entry_amount: ((self.Size - SIZE_IMAGE_BASE_RELOCATION) / 2)as usize, // divided by sizeof(WORD);
+            index: 0,
+            array: unsafe { core::ptr::addr_of!(self) as usize + SIZE_IMAGE_DATA_DIRECTORY }
+        }
+    }
+}
+
+impl Iterator for IMAGE_DATA_DIRECTORY_ITERATOR {
+    type Item = u16;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.index < self.entry_amount {
+            true => {
+                let res = unsafe { *((self.array + 2 * self.index) as *mut u16) };
+                self.index += 1;
+                Some(res)
+            }
+            false => None
+        }
+    }
+}
+
 #[repr(C)]
 pub struct IMAGE_IMPORT_DESCRIPTOR {
     pub OriginalFirstThunk: DWORD,
@@ -154,6 +184,47 @@ pub struct IMAGE_IMPORT_DESCRIPTOR {
 pub struct IMAGE_IMPORT_BY_NAME {
     pub Hint: WORD,
     pub Name: WORD
+}
+
+
+
+pub struct IMAGE_IMPORT_DIRECTORY_WRAPPER {
+    pub import_desc: *mut IMAGE_IMPORT_DESCRIPTOR,
+}
+
+impl Iterator for IMAGE_IMPORT_DIRECTORY_WRAPPER {
+    type Item = *mut IMAGE_IMPORT_DESCRIPTOR;
+    fn next(&mut self) -> Option<Self::Item> {
+        match unsafe { (*(self.import_desc)).Name } {
+            0 => None,
+            _ => {
+                let res = self.import_desc;
+                self.import_desc = (self.import_desc as usize + 0x14) as *mut IMAGE_IMPORT_DESCRIPTOR;
+                Some(res)
+            }
+        }
+    }
+}
+
+pub struct IMPORT_FUNCTION_WRAPPER {
+    pub thunk: *mut usize,
+    pub func: *mut usize
+}
+
+impl Iterator for IMPORT_FUNCTION_WRAPPER {
+    type Item = (usize, *mut usize);
+    fn next(&mut self) -> Option<Self::Item> {
+        let thunk = unsafe { self.thunk.read() };
+        let func = self.func;
+        match thunk {
+            0 => None,
+            _ => {
+                self.thunk = (self.thunk as usize + 8) as *mut usize;
+                self.func = (self.func as usize + 8) as *mut usize;
+                Some((thunk, func))
+            }
+        }
+    }
 }
 
 #[repr(C)]
@@ -187,6 +258,41 @@ pub struct IMAGE_TLS_DIRECTORY {
     pub AddressOfCallBacks: ULONGLONG,     // PIMAGE_TLS_CALLBACK *;
     pub SizeOfZeroFill: DWORD,
     pub Characteristics: DWORD
+}
+
+pub struct IMAGE_TLS_DIRECTORY_WRAPPER {
+    pub tls: *const IMAGE_TLS_DIRECTORY
+}
+
+pub type IMAGE_TLS_CALLBACK = extern "system" fn(DllHandle: PVOID, Reason: DWORD, Reserved: PVOID) -> u32;
+
+pub struct IMAGE_TLS_DIRECTORY_ITERATOR {
+    callback: *const IMAGE_TLS_CALLBACK
+}
+
+impl IntoIterator for IMAGE_TLS_DIRECTORY_WRAPPER {
+    type Item = *const IMAGE_TLS_CALLBACK;
+    type IntoIter = IMAGE_TLS_DIRECTORY_ITERATOR;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IMAGE_TLS_DIRECTORY_ITERATOR {
+            callback: unsafe { (*(self.tls)).AddressOfCallBacks as *mut IMAGE_TLS_CALLBACK }
+        }
+    }
+}
+
+impl Iterator for IMAGE_TLS_DIRECTORY_ITERATOR {
+    type Item = *const IMAGE_TLS_CALLBACK;
+    fn next(&mut self) -> Option<Self::Item> {
+        match unsafe { self.callback as usize != 0 && *(self.callback as *mut usize) != 0 } {
+            true => { 
+                let res = self.callback;
+                self.callback = (self.callback as usize + 8) as *const IMAGE_TLS_CALLBACK;
+                Some(res)
+            },
+            false => None
+        }
+    }
 }
 
 #[repr(C)]

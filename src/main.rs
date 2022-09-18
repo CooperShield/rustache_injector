@@ -213,7 +213,7 @@ fn create_thread(process: HANDLE, start_addr: ShellcodeFn, arg_ptr: *const c_voi
     }
 }
 
-fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core::result::Result<(), String>{
+fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String, entrypoint_offset: Option<u64>) -> core::result::Result<(), String>{
 
     let dll = match PeView::from_bytes(&dll_vec) {
         Ok(o) => o,
@@ -223,7 +223,10 @@ fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core
     let dll_opt_hdr = dll.optional_header();
 
     let target_base: *const c_void = unsafe { std::mem::transmute(dll_opt_hdr.ImageBase) };
-    let entrypoint = dll_opt_hdr.AddressOfEntryPoint;
+    let entrypoint_offset = match entrypoint_offset {
+        Some(offset) => offset,
+        None => dll_opt_hdr.AddressOfEntryPoint as u64
+    };
     let target_base = get_memory(process, target_base, dll_opt_hdr.SizeOfImage as usize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     let target_base = match target_base {
         Ok(a) => a,
@@ -255,7 +258,7 @@ fn manual_map(process: HANDLE, dll_vec: Vec<u8>, shellcode_path: String) -> core
         load_library: load_library as u64, // 
         get_proc_address:  get_proc_address as u64,
         dll_base: target_base as u64,
-        entrypoint: target_base as u64 + entrypoint as u64,
+        entrypoint: target_base as u64 + entrypoint_offset,
         done: 0,
     };
 
@@ -337,7 +340,7 @@ fn main() {
         Err(_) => panic!("Cannot read file at dll path")
     };
 
-    match manual_map(process, dll, path_to_shellcode){
+    match manual_map(process, dll, path_to_shellcode, None){
         Ok(_) => (),
         Err(e) => println!("{}", e),
     };
